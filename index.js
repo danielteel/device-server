@@ -5,163 +5,59 @@ const crypto = require('crypto');
 const textDecoder = new TextDecoder;
 const textEncoder = new TextEncoder;
 
-const fs = require('fs');
-const path = require('path');
-const logFilePath = path.join(__dirname, 'devlog.log');
- 
 
 let server = null;
 
 
-function logdev(...args){
-    console.log(...args);
-    let message='';
-    for (const a of args){
-        message+=String(a)+" ";
-    }
-    fs.appendFile(logFilePath, message + '\n', (err) => {
-        if (err) {
-            console.error('Device server: Error appending to log file:', err);
-        }
-    });
+class PACKETSTATE {
+    // Private Fields
+
+    static get LEN1() { return 1; }
+    static get LEN2() { return 2; }
+    static get LEN3() { return 3; }
+    static get LEN4() { return 4; }
+    static get PAYLOAD() {return 5; }
+}
+
+class NETSTATUS {
+    static get OPENED() { return 1};
+    static get INITIAL_RECVD() {return 2;}
+    static get READY() {return 3;}
 }
 
 class DeviceIO {
+
     static timeoutPeriod=20000;
-    static devices = [];
-    static deviceCounter=0;
 
-    static runManualTimeoutCheck(){
-        try{
-            for (const device of DeviceIO.devices){
-                if (Date.now()-device.lastTimeRecvd>=DeviceIO.timeoutPeriod){
-                    logdev("Manual timeout of "+device.name);
-                    DeviceIO.removeDevice(device);
-                }
-            }
-        }catch(e){
 
-        }
-        setTimeout(DeviceIO.runManualTimeoutCheck, DeviceIO.timeoutPeriod);   
-    }
-    static {
-        setTimeout(this.runManualTimeoutCheck, this.timeoutPeriod);  
-    }
-
-    static getDevices = () => {
-        return this.devices;
-    }
-
-    static removeDevice = (device) => {
-        try{
-            if (device.socket){
-                device.socket.destroy();
-            }
-        }catch{
-        }
-        this.devices=this.devices.filter( v => {
-            if (v===device) return false;
-            return true;
-        });
-    }
-
-    static isNameConnected = (name) =>{
-        for (const device of this.devices){
-            if (device.name===name){
-                return true;
-            }
-        }
-        return false;
-    }
-
-    static addDevice = (device) => {
-        this.devices.push(device);
-    }
-
-    constructor(socket, name, key, deviceHandshakeNumber, actions, onError){
-        this.lastTimeRecvd = Date.now();
-        this.name=name;
-        this.deviceHandshakeNumber=deviceHandshakeNumber;
-        this.actions=actions;
-        this.onError=onError;
-        this.key=key;
-        this.resetPacketData();
+    constructor(socket){
         this.socket=socket;
-
         this.socket.setNoDelay();
+        socket.on('data', this.onData);
+        console.log(socket.address, 'connected');
 
-        this.handshakeNumber=Uint32Array.from([crypto.randomInt(4294967295)]); 
+        this.netStatus=NETSTATUS.OPENED;
+        this.packetState=PACKETSTATE.LEN1;
+
+        this.name=null;
+        this.key=null;
+        this.deviceHandshake=null;
+        this.serverHandshake=Uint32Array.from([crypto.randomInt(4294967295)]); 
+
+        this.payloadWriteIndex=0;
+        this.payload=null;
 
         socket.setTimeout(this.constructor.timeoutPeriod);
-
-        this.constructor.addDevice(this);
-        socket.on('data', this.onData);
         socket.on('end', () => {
-            this.constructor.removeDevice(this);
-            logdev(this.name, "closed its connection");
+            console.log('name',this.name, this.socket.address, 'disconnected');
         });        
         socket.on('timeout', () => {
-            socket.destroy();
-            this.constructor.removeDevice(this);
-            this.onError(this.name+' timed out, closing connection', this);
+            console.log('name',this.name, this.socket.address, 'timed out');
         });
         socket.on('error', (err)=>{
             socket.destroy();
-            this.constructor.removeDevice(this);
-            this.onError(this.name+' '+err, this);
+            console.log('name',this.name, this.socket.address, 'error occured', err);
         });
-
-        this.sendInitialHandshake();
-    }
-
-    onDeviceDatabaseDelete = () => {
-        socket.destroy();
-        this.constructor.removeDevice(this);
-        this.onError(this.name+' device was deleted from database, closing connection', this);
-    }
-
-    onCompletePacket = (device, data) => {
-        if (data[0]===0xFF && data[1]===0xD8){
-            device.image=data;
-        }else if (data[0]==='i'.charCodeAt(0) && data[1]==='n'.charCodeAt(0)){
-            const time=new Date();
-            if (time.getHours()>=20 && time.getHours()<22){
-                device.sendPacket(new Uint8Array([110, 116]));//It is night time
-            }else{
-                device.sendPacket(new Uint8Array([110, 102]));//Its not night time
-            }
-            return;
-        }else{
-            console.log('unresolved data', data[0], data[1]);
-        }
-    }
-
-    sendAction = (actionTitle, data) => {
-        if (!Array.isArray(this.actions)) return false;
-        for (const action of this.actions){
-            if (action.title.toLowerCase().trim()===actionTitle.toLowerCase().trim()){
-                switch (action.type.toLowerCase().trim()){
-                    case 'void':
-                        this.sendPacket(new Uint8Array([action.commandByte]));
-                        return true;
-                    case 'byte':
-                        this.sendPacket(new Uint8Array([action.commandByte, data]));
-                        return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    resetPacketData = () => {
-        this.magic1=null;
-        this.magic2=null;
-        this.length1=null;
-        this.length2=null;
-        this.length3=null;
-        this.length4=null;
-        this.payload=null;
-        this.payloadWriteIndex=0;
     }
 
     sendInitialHandshake = () => {
@@ -182,8 +78,8 @@ class DeviceIO {
         }
   
         const encryptedData = encrypt(this.handshakeNumber[0], data, this.key);
-        const header=new Uint8Array([73, 31, 0, 0, 0, 0]);
-        (new DataView(header.buffer)).setUint32(2, encryptedData.length, true);
+        const header=new Uint8Array([0, 0, 0, 0]);
+        (new DataView(header.buffer)).setUint32(0, encryptedData.length, true);
         this.socket.write(header);
         this.socket.write(encryptedData);
 

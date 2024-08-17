@@ -27,9 +27,6 @@ class NETSTATUS {
 
 class DeviceIO {
 
-    static timeoutPeriod=20000;
-
-
     constructor(socket){
         this.socket=socket;
         this.socket.setNoDelay();
@@ -41,13 +38,13 @@ class DeviceIO {
 
         this.name=null;
         this.key=null;
-        this.deviceHandshake=null;
+        this.clientHandshake=Uint32Array.from([0]);
         this.serverHandshake=Uint32Array.from([crypto.randomInt(4294967295)]); 
 
+        this.payloadLength=0;
         this.payloadWriteIndex=0;
         this.payload=null;
 
-        socket.setTimeout(this.constructor.timeoutPeriod);
         socket.on('end', () => {
             console.log('name',this.name, this.socket.address, 'disconnected');
         });        
@@ -60,78 +57,59 @@ class DeviceIO {
         });
     }
 
-    sendInitialHandshake = () => {
-        const encryptedData = encrypt(this.handshakeNumber[0], null, this.key);
-
-        const header=new Uint8Array([13, 37, 0, 0, 0, 0]);
-        (new DataView(header.buffer)).setUint32(2, encryptedData.length, true);
-        
-        this.socket.write(header);
-        this.socket.write(encryptedData);
-    }
-
     sendPacket = (data) => {
         if (typeof data==='string') data=textEncoder.encode(data);
-        if (data.length>(0x0FFFF0)){
-            this.onError(this.name+' cant send a message bigger than 0x0FFFF0', this);
+        if (data && data.length>0x0FFFF0){
+            console.log(this.name, this.socket.address, 'cant send a message bigger than 0x0FFFF0');
             return;
         }
   
-        const encryptedData = encrypt(this.handshakeNumber[0], data, this.key);
+        const encryptedData = encrypt(this.serverHandshake[0], data, this.key);
         const header=new Uint8Array([0, 0, 0, 0]);
         (new DataView(header.buffer)).setUint32(0, encryptedData.length, true);
         this.socket.write(header);
         this.socket.write(encryptedData);
 
-        this.handshakeNumber[0]++;
+        this.serverHandshake[0]++;
     }
 
     onData = (buffer) => {    
-        this.lastTimeRecvd=Date.now();
         for (let i=0;i<buffer.length;i++){
             const byte=buffer[i];
-            if (this.magic1===null){
-                this.magic1=byte;
-            }else if (this.magic2===null){
-                this.magic2=byte;
-                if (this.magic1===37 && this.magic2===13){
-                    this.resetPacketData();
-                }else if (this.magic1!=73 || this.magic2!=31){
+            if (this.packetState===PACKETSTATE.LEN1){
+                this.payloadLength=byte;
+                this.packetState=PACKETSTATE.LEN2;
+
+            }else if (this.packetState===PACKETSTATE.LEN2){
+                this.payloadLength|=byte<<8;
+                this.packetState=PACKETSTATE.LEN3;
+
+            }else if (this.packetState===PACKETSTATE.LEN3){
+                this.payloadLength|=byte<<16;
+                this.packetState=PACKETSTATE.LEN4;
+
+            }else if (this.packetState===PACKETSTATE.LEN4){
+                this.payloadLength|=byte<<24;
+                this.packetState=PACKETSTATE.PAYLOAD;
+
+                if (this.payloadLength>0x0FFFFF){
                     this.socket.destroy();
-                    this.constructor.removeDevice(this);
-                    this.onError(this.name+' bad magic bytes, closing connection', this);
+                    console.log(this.name, this.socket.address, 'device sent packet larger than 0x0FFFFF');
                     return;
                 }
-            }else if (this.length1===null){
-                this.length1=byte;
-            }else if (this.length2===null){
-                this.length2=byte;
-            }else if (this.length3===null){
-                this.length3=byte;
-            }else if (this.length4===null){
-                this.length4=byte;
 
-                const temp = new Uint8Array([this.length1, this.length2, this.length3, this.length4]);
-                const tempView = new DataView(temp.buffer);
-                this.length=tempView.getUint32(0, true);
-
-                if (this.length>0x0FFFFF){
-                    this.socket.destroy();
-                    this.constructor.removeDevice(this);
-                    this.onError(this.name+' device sent packet larger than 0x0FFFFF', this);
-                }
-
-                this.payload = Buffer.alloc(this.length);
+                this.payload = Buffer.alloc(this.payloadLength);
                 this.payloadWriteIndex=0;
-            }else{
-                const howFar = Math.min(this.length, buffer.length-i);
+
+            }else if (this.packetState===PACKETSTATE.PAYLOAD)
+                const howFar = Math.min(this.payloadLength, buffer.length-i);
                 buffer.copy(this.payload, this.payloadWriteIndex, i, howFar+i);
                 this.payloadWriteIndex+=howFar;
-                if (this.payloadWriteIndex>=this.length){
+                if (this.payloadWriteIndex>=this.payloadLength){
                     //Process complete packet here
                     try{
                         const {data: decrypted, handshake: recvdHandshake} = decrypt(this.payload, this.key);
-                        if (recvdHandshake!=this.deviceHandshakeNumber[0]){
+                        if (recvdHandshake!=this.clientHandshake[0]){
                             this.socket.destroy();
                             this.constructor.removeDevice(this);
                             this.onError(this.name+' incorrect handshake number, closing connection, recvd: '+recvdHandshake+' expected: '+this.deviceHandshakeNumber[0], this);
@@ -140,7 +118,7 @@ class DeviceIO {
                             this.deviceHandshakeNumber[0]++;
                             this.onCompletePacket(this, decrypted);
                         }
-                        this.resetPacketData();
+                        this.packetState=PACKETSTATE.LEN1;
                     }catch(e){
                         this.socket.destroy();
                         this.constructor.removeDevice(this);

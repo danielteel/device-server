@@ -8,21 +8,26 @@ const textEncoder = new TextEncoder;
 
 let server = null;
 
+const deviceKeys = {
+    'device1': '53bb3399120b109b6b655a28fddb90032a0b6f6d9d0052e2dc551d70d0631a9e',
+    'device2': 'ab9a84fe09a82b7e0911798919e8e7f46ff7e4962caea6a939c8d884c3f837a6'
+}
+
 
 class PACKETSTATE {
     // Private Fields
-
-    static get LEN1() { return 1; }
-    static get LEN2() { return 2; }
-    static get LEN3() { return 3; }
-    static get LEN4() { return 4; }
-    static get PAYLOAD() {return 5; }
+    static get NAMELEN() { return 0; }
+    static get NAME() { return 1; }
+    static get LEN1() { return 2; }
+    static get LEN2() { return 3; }
+    static get LEN3() { return 4; }
+    static get LEN4() { return 5; }
+    static get PAYLOAD() {return 6; }
 }
 
 class NETSTATUS {
     static get OPENED() { return 1};
-    static get INITIAL_RECVD() {return 2;}
-    static get READY() {return 3;}
+    static get READY() {return 2;}
 }
 
 class DeviceIO {
@@ -34,8 +39,10 @@ class DeviceIO {
         console.log(socket.address, 'connected');
 
         this.netStatus=NETSTATUS.OPENED;
-        this.packetState=PACKETSTATE.LEN1;
+        this.packetState=PACKETSTATE.NAMELEN;
 
+        this.nameLength=0;
+        this.nameWriteIndex=0;
         this.name=null;
         this.key=null;
         this.clientHandshake=Uint32Array.from([0]);
@@ -73,10 +80,30 @@ class DeviceIO {
         this.serverHandshake[0]++;
     }
 
+    onFullPacket = (handshake, data) => {
+        if (this.netStatus===NETSTATUS.OPENED)
+    }
+
     onData = (buffer) => {    
         for (let i=0;i<buffer.length;i++){
             const byte=buffer[i];
-            if (this.packetState===PACKETSTATE.LEN1){
+            if (this.netStatus===NETSTATUS.OPENED && this.packetState===PACKETSTATE.NAMELEN){
+                this.nameLength=byte;
+                this.packetState=PACKETSTATE.NAME;
+            }else if (this.netStatus===NETSTATUS.OPENED && this.packetState===PACKETSTATE.NAME){
+                this.name+=String.fromCharCode(byte);
+                this.nameWriteIndex++;
+                if (this.nameWriteIndex>=this.nameLength){
+                    if (deviceKeys[this.name]){
+                        this.key=deviceKeys[this.name];
+                        this.packetState=PACKETSTATE.LEN1;
+                    }else{
+                        console.log(this.name, this.socket.address, 'unknown device name');
+                        this.socket.destroy();
+                        return;
+                    }
+                }
+            }else if (this.packetState===PACKETSTATE.LEN1){
                 this.payloadLength=byte;
                 this.packetState=PACKETSTATE.LEN2;
 
@@ -109,15 +136,7 @@ class DeviceIO {
                     //Process complete packet here
                     try{
                         const {data: decrypted, handshake: recvdHandshake} = decrypt(this.payload, this.key);
-                        if (recvdHandshake!=this.clientHandshake[0]){
-                            this.socket.destroy();
-                            this.constructor.removeDevice(this);
-                            this.onError(this.name+' incorrect handshake number, closing connection, recvd: '+recvdHandshake+' expected: '+this.deviceHandshakeNumber[0], this);
-                            return;
-                        }else{
-                            this.deviceHandshakeNumber[0]++;
-                            this.onCompletePacket(this, decrypted);
-                        }
+                        this.onFullPacket(handshake, data);
                         this.packetState=PACKETSTATE.LEN1;
                     }catch(e){
                         this.socket.destroy();

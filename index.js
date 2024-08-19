@@ -7,6 +7,7 @@ const textEncoder = new TextEncoder;
 
 
 let server = null;
+let devicePort = 4004;
 
 let devices = [];
 
@@ -150,7 +151,7 @@ class Device {
                 this.payload = Buffer.alloc(this.payloadLength);
                 this.payloadWriteIndex=0;
 
-            }else if (this.packetState===PACKETSTATE.PAYLOAD)
+            }else if (this.packetState===PACKETSTATE.PAYLOAD){
                 const howFar = Math.min(this.payloadLength, buffer.length-i);
                 buffer.copy(this.payload, this.payloadWriteIndex, i, howFar+i);
                 this.payloadWriteIndex+=howFar;
@@ -192,3 +193,7 @@ function createDeviceServer(){
 }
 
 createDeviceServer();
+
+server.listen(devicePort, function() {
+    console.log(`Device server listening on port ${devicePort}`);
+});

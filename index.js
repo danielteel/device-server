@@ -8,6 +8,8 @@ const textEncoder = new TextEncoder;
 
 let server = null;
 
+let devices = [];
+
 const deviceKeys = {
     'device1': '53bb3399120b109b6b655a28fddb90032a0b6f6d9d0052e2dc551d70d0631a9e',
     'device2': 'ab9a84fe09a82b7e0911798919e8e7f46ff7e4962caea6a939c8d884c3f837a6'
@@ -22,15 +24,17 @@ class PACKETSTATE {
     static get LEN2() { return 3; }
     static get LEN3() { return 4; }
     static get LEN4() { return 5; }
-    static get PAYLOAD() {return 6; }
+    static get PAYLOAD() { return 6; }
+    static get ERROR() { return 7; }
 }
 
 class NETSTATUS {
-    static get OPENED() { return 1};
-    static get READY() {return 2;}
+    static get OPENED() { return 1; }
+    static get READY() { return 2; }
+    static get ERROR() { return 3; }
 }
 
-class DeviceIO {
+class Device {
 
     constructor(socket){
         this.socket=socket;
@@ -59,8 +63,20 @@ class DeviceIO {
             console.log('name',this.name, this.socket.address, 'timed out');
         });
         socket.on('error', (err)=>{
-            socket.destroy();
             console.log('name',this.name, this.socket.address, 'error occured', err);
+            this.deviceErrored();
+        });
+    }
+
+    deviceErrored = () => {
+        console.log();
+        this.socket.destroy();
+        this.socket=null;
+        this.payload=null;
+        this.packetState=PACKETSTATE.ERROR();
+        this.netStatus=NETSTATUS.ERROR();
+        devices=devices.filter( (v) => {
+            return !(v===this);
         });
     }
 
@@ -68,7 +84,7 @@ class DeviceIO {
         if (typeof data==='string') data=textEncoder.encode(data);
         if (data && data.length>0x0FFFF0){
             console.log(this.name, this.socket.address, 'cant send a message bigger than 0x0FFFF0');
-            return;
+            return false;
         }
   
         const encryptedData = encrypt(this.serverHandshake[0], data, this.key);
@@ -78,10 +94,16 @@ class DeviceIO {
         this.socket.write(encryptedData);
 
         this.serverHandshake[0]++;
+
+        return true;
     }
 
     onFullPacket = (handshake, data) => {
-        if (this.netStatus===NETSTATUS.OPENED)
+        if (this.netStatus===NETSTATUS.OPENED){
+
+        }else{
+
+        }
     }
 
     onData = (buffer) => {    
@@ -99,7 +121,7 @@ class DeviceIO {
                         this.packetState=PACKETSTATE.LEN1;
                     }else{
                         console.log(this.name, this.socket.address, 'unknown device name');
-                        this.socket.destroy();
+                        this.deviceErrored();
                         return;
                     }
                 }
@@ -120,7 +142,7 @@ class DeviceIO {
                 this.packetState=PACKETSTATE.PAYLOAD;
 
                 if (this.payloadLength>0x0FFFFF){
-                    this.socket.destroy();
+                    this.deviceErrored();
                     console.log(this.name, this.socket.address, 'device sent packet larger than 0x0FFFFF');
                     return;
                 }
@@ -136,12 +158,11 @@ class DeviceIO {
                     //Process complete packet here
                     try{
                         const {data: decrypted, handshake: recvdHandshake} = decrypt(this.payload, this.key);
-                        this.onFullPacket(handshake, data);
+                        this.onFullPacket(recvdHandshake, decrypted);
                         this.packetState=PACKETSTATE.LEN1;
-                    }catch(e){
-                        this.socket.destroy();
-                        this.constructor.removeDevice(this);
-                        this.onError(this.name+' failed to decrypt incoming packet', this);
+                    }catch(e){            
+                        console.log('name',this.name, this.socket.address, 'failed to decrypt packet');
+                        this.deviceErrored();
                         return; 
                     }
                 }
@@ -151,152 +172,6 @@ class DeviceIO {
     }
 }
 
-class UndeterminedDevice {
-    constructor(socket, onError){
-        this.socket=socket;
-        this.onError=onError;
-        
-        this.magic1=null;
-        this.magic2=null;
-        this.name=null;
-        this.nameLength=null;
-        this.nameWriteIndex=0;
-        this.deviceHandshakeNumber=null;
-        this.length=null;
-        this.length1=null;
-        this.length2=null;
-        this.length3=null;
-        this.length4=null;
-        this.payload=null;
-        this.payloadWriteIndex=0;
-        this.actions=[];
-        this.key=null;
-
-        socket.setTimeout(20000);
-        
-        socket.on('data', this.onData);  
-        
-        socket.on('end', () => {
-            this.onError('undetermined device ended connection before handshake complete');
-        });        
-        socket.on('timeout', () => {
-            socket.destroy();
-            this.onError('undetermined device timed out, closing connection');
-        });
-        socket.on('error', (err)=>{
-            socket.destroy();
-            this.onError('undetermined device had an error '+err);
-        });
-    }
-
-    onData = async (buffer) => {    
-        for (let i=0;i<buffer.length;i++){
-            const byte=buffer[i];
-            if (this.magic1===null){
-                this.magic1=byte;
-            }else if (this.magic2===null){
-                this.magic2=byte;
-                if (this.magic1!=13 || this.magic2!=37){
-                    this.socket.destroy();
-                    this.onError('undetermined device had bad magic bytes, closing connection');
-                    return;
-                }
-            }else if (this.nameLength===null){
-                this.nameLength=byte;
-                this.name="";
-                if (this.nameLength===0){
-                    this.socket.destroy();
-                    this.onError('undetermined device tried to have 0 length name, closing connection');
-                    return;
-                }
-            }else if (this.nameWriteIndex<this.nameLength){
-                this.name+=String.fromCharCode(byte);
-                this.nameWriteIndex++;
-                if (this.nameWriteIndex>=this.nameLength){
-                    if (DeviceIO.isNameConnected(this.name)){
-                        this.socket.destroy();
-                        this.onError('device with name '+this.name+' is already connected, closing connection');
-                        return;
-                    }
-                }
-            }else if (this.length1===null){
-                this.length1=byte;
-            }else if (this.length2===null){
-                this.length2=byte;
-            }else if (this.length3===null){
-                this.length3=byte;
-            }else if (this.length4===null){
-                this.length4=byte;
-
-                const temp = new Uint8Array([this.length1, this.length2, this.length3, this.length4]);
-                const tempView = new DataView(temp.buffer);
-                this.length=tempView.getUint32(0, true);
-
-                if (this.length>0x0FFFFF){
-                    this.socket.destroy();
-                    this.onError('undetermined device '+this.name+' sent packet larger than 0x0FFFFF');
-                    return;
-                }
-
-                this.payload = Buffer.alloc(this.length);
-                this.payloadWriteIndex=0;
-            }else{
-                const howFar = Math.min(this.length, buffer.length-i);
-                buffer.copy(this.payload, this.payloadWriteIndex, i, howFar+i);
-                this.payloadWriteIndex+=howFar;
-                if (this.payloadWriteIndex>=this.length){
-                    //Process complete packet here
-                    try{
-                        const [{encro_key}] = await getKnex()('devices').select('encro_key').where({name: this.name});
-                        this.key=encro_key;
-                        if (!this.key){
-                            this.socket.destroy();
-                            this.onError('device record "'+this.name+'" not found');
-                            return;
-                        }
-
-                        const {data: decrypted, handshake: recvdHandshake} = decrypt(this.payload, this.key);
-                        this.deviceHandshakeNumber=new Uint32Array([recvdHandshake]);
-
-                        if (decrypted.length!=0){
-                            const actions=textDecoder.decode(decrypted).split(',');
-                            for (const action of actions){
-                                const [title, type, commandByte] = action.split(':');
-                                this.actions.push({title, type, commandByte});
-                            }
-                        }
-                        this.socket.removeAllListeners();
-                        new DeviceIO(this.socket, this.name, this.key, this.deviceHandshakeNumber, this.actions, this.onError);
-                    }catch(e){                
-                        this.socket.destroy();
-                        this.onError('failed to fetch or decrypt device data');
-                    }
-                }
-                i+=howFar-1;
-            }
-        }
-    }
-}
-
-class Device{
-    constructor(socket){
-        socket.setTimeout(20000);
-        
-        socket.on('data', this.onData);  
-        
-        socket.on('end', () => {
-            this.onError('undetermined device ended connection before handshake complete');
-        });        
-        socket.on('timeout', () => {
-            socket.destroy();
-            this.onError('undetermined device timed out, closing connection');
-        });
-        socket.on('error', (err)=>{
-            socket.destroy();
-            this.onError('undetermined device had an error '+err);
-        });
-    }
-}
 
 function createDeviceServer(){
     if (server) return;

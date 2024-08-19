@@ -181,12 +181,7 @@ function createDeviceServer(){
 
 
     server.on('connection', function(socket) {
-
-        logdev("Device connected");
-        const onError = (msg, device) => {
-            logdev('Device Error', msg);
-        }
-        new UndeterminedDevice(socket, onError);
+        devices.push(new Device(socket));
     });
 
     return server;

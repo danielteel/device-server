@@ -37,7 +37,9 @@ class NETSTATUS {
 
 class Device {
 
-    constructor(socket){
+    constructor(socket, onDone){
+        this.onDone=onDone;
+
         this.socket=socket;
         this.socket.setNoDelay();
         socket.on('data', this.onData);
@@ -76,9 +78,7 @@ class Device {
         this.payload=null;
         this.packetState=PACKETSTATE.ERROR();
         this.netStatus=NETSTATUS.ERROR();
-        devices=devices.filter( (v) => {
-            return !(v===this);
-        });
+        this.onDone(this);
     }
 
     sendPacket = (data) => {
@@ -101,9 +101,10 @@ class Device {
 
     onFullPacket = (handshake, data) => {
         if (this.netStatus===NETSTATUS.OPENED){
-
+            this.clientHandshake=handshake;
+            this.netStatus=NETSTATUS.READY;
         }else{
-
+            
         }
     }
 
@@ -161,27 +162,39 @@ class Device {
                         const {data: decrypted, handshake: recvdHandshake} = decrypt(this.payload, this.key);
                         this.onFullPacket(recvdHandshake, decrypted);
                         this.packetState=PACKETSTATE.LEN1;
-                    }catch(e){            
+                    }catch(e){
                         console.log('name',this.name, this.socket.address, 'failed to decrypt packet');
                         this.deviceErrored();
-                        return; 
+                        return;
                     }
                 }
                 i+=howFar-1;
+            }else{
+                console.log('name',this.name, this.socket.address, 'unknown packet/net status', this.packetState+'/'+this.netStatus);
+                this.deviceErrored();
+                return;
             }
         }
     }
 }
 
+function onDeviceDone(device){
+    const devicesOriginalLength=devices.length;
+    devices=devices.filter( (v) => {
+        return !(v===device);
+    });
+    if (devices.length!==devicesOriginalLength-1){
+        console.log("Was supposed to delete one device. Started with "+devicesOriginalLength+" but ended up with "+devices.length);
+    }
+}
 
 function createDeviceServer(){
     if (server) return;
     
     server = new (require('net')).Server();
 
-
     server.on('connection', function(socket) {
-        devices.push(new Device(socket));
+        devices.push(new Device(socket, onDeviceDone));
     });
 
     return server;

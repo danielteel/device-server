@@ -104,7 +104,7 @@ class Device {
             this.clientHandshake=handshake;
             this.netStatus=NETSTATUS.READY;
         }else{
-            
+
         }
     }
 
@@ -184,7 +184,7 @@ function onDeviceDone(device){
         return !(v===device);
     });
     if (devices.length!==devicesOriginalLength-1){
-        console.log("Was supposed to delete one device. Started with "+devicesOriginalLength+" but ended up with "+devices.length);
+        console.log("onDeviceDone: was supposed to remove one device. Started with "+devicesOriginalLength+" but ended up with "+devices.length);
     }
 }
 

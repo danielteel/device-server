@@ -39,6 +39,7 @@ class Device {
 
     constructor(socket, onDone){
         this.lastData=null;//Added for debugging
+        this.sendCount=0;//Added for debugging
 
         this.onDone=onDone;
 
@@ -110,7 +111,7 @@ class Device {
         }else{
             if (this.clientHandshake[0]!==handshake){
                 console.log(this.name, this.socket.address, 'incorrect handshake, exepcted '+this.clientHandshake[0]+' but recvd '+handshake);
-                
+
                 //Added for Debugging
                 console.log("Last data:",this.lastData);
                 console.log("Current data:", textDecoder.decode(data));
@@ -120,9 +121,9 @@ class Device {
                 return;
             }
             this.clientHandshake[0]++;
+            
             this.lastData=textDecoder.decode(data);//Added for debugging
-
-            this.sendPacket("Thanks "+(new Date().toString()));
+            this.sendPacket("count: "+this.sendCount);//Added for debugging
         }
     }
 

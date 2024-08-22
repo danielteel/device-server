@@ -42,6 +42,7 @@ class Device {
 
         this.socket=socket;
         this.socket.setNoDelay();
+    
         socket.on('data', this.onData);
         console.log(socket.address, 'connected');
 
@@ -72,12 +73,11 @@ class Device {
     }
 
     deviceErrored = () => {
-        console.log();
         this.socket.destroy();
         this.socket=null;
         this.payload=null;
-        this.packetState=PACKETSTATE.ERROR();
-        this.netStatus=NETSTATUS.ERROR();
+        this.packetState=PACKETSTATE.ERROR;
+        this.netStatus=NETSTATUS.ERROR;
         this.onDone(this);
     }
 
@@ -101,10 +101,19 @@ class Device {
 
     onFullPacket = (handshake, data) => {
         if (this.netStatus===NETSTATUS.OPENED){
-            this.clientHandshake=handshake;
+            this.clientHandshake[0]=handshake;
+            this.clientHandshake[0]++;
             this.netStatus=NETSTATUS.READY;
+            this.sendPacket(null);
         }else{
-
+            if (this.clientHandshake[0]!==handshake){
+                console.log(this.name, this.socket.address, 'incorrect handshake, exepcted '+this.clientHandshake[0]+' but recvd '+handshake);
+                this.deviceErrored();
+                return;
+            }
+            this.clientHandshake[0]++;
+            console.log(handshake, textDecoder.decode(data));
+            this.sendPacket("Thanks "+(new Date().toString()));
         }
     }
 
@@ -113,6 +122,7 @@ class Device {
             const byte=buffer[i];
             if (this.netStatus===NETSTATUS.OPENED && this.packetState===PACKETSTATE.NAMELEN){
                 this.nameLength=byte;
+                this.name="";
                 this.packetState=PACKETSTATE.NAME;
             }else if (this.netStatus===NETSTATUS.OPENED && this.packetState===PACKETSTATE.NAME){
                 this.name+=String.fromCharCode(byte);
@@ -144,8 +154,8 @@ class Device {
                 this.packetState=PACKETSTATE.PAYLOAD;
 
                 if (this.payloadLength>0x0FFFFF){
-                    this.deviceErrored();
                     console.log(this.name, this.socket.address, 'device sent packet larger than 0x0FFFFF');
+                    this.deviceErrored();
                     return;
                 }
 

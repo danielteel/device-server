@@ -38,6 +38,8 @@ class NETSTATUS {
 class Device {
 
     constructor(socket, onDone){
+        this.lastData=null;//Added for debugging
+
         this.onDone=onDone;
 
         this.socket=socket;
@@ -108,11 +110,18 @@ class Device {
         }else{
             if (this.clientHandshake[0]!==handshake){
                 console.log(this.name, this.socket.address, 'incorrect handshake, exepcted '+this.clientHandshake[0]+' but recvd '+handshake);
+                
+                //Added for Debugging
+                console.log("Last data:",this.lastData);
+                console.log("Current data:", textDecoder.decode(data));
+                //End Added for Debugging
+
                 this.deviceErrored();
                 return;
             }
             this.clientHandshake[0]++;
-            console.log(handshake, textDecoder.decode(data));
+            this.lastData=textDecoder.decode(data);//Added for debugging
+
             this.sendPacket("Thanks "+(new Date().toString()));
         }
     }

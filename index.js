@@ -121,9 +121,9 @@ class Device {
                 return;
             }
             this.clientHandshake[0]++;
-            
             this.lastData=textDecoder.decode(data);//Added for debugging
-            this.sendPacket("count: "+this.sendCount);//Added for debugging
+            console.log(this.lastData);
+            this.sendPacket("count: "+this.sendCount++);//Added for debugging
         }
     }
 

@@ -12,8 +12,8 @@ let devicePort = 4004;
 let devices = [];
 
 const deviceKeys = {
-    'device1': '53bb3399120b109b6b655a28fddb90032a0b6f6d9d0052e2dc551d70d0631a9e',
-    'device2': 'ab9a84fe09a82b7e0911798919e8e7f46ff7e4962caea6a939c8d884c3f837a6'
+    'device1': {key: '53bb3399120b109b6b655a28fddb90032a0b6f6d9d0052e2dc551d70d0631a9e', connected: false},
+    'device2': {key: 'ab9a84fe09a82b7e0911798919e8e7f46ff7e4962caea6a939c8d884c3f837a6', connected: false}
 }
 
 
@@ -36,18 +36,15 @@ class NETSTATUS {
 }
 
 class Device {
+    static socketTimeoutTime = 30000;
 
     constructor(socket, onDone){
-        this.lastData=null;//Added for debugging
-        this.sendCount=0;//Added for debugging
-
         this.onDone=onDone;
 
         this.socket=socket;
-        this.socket.setNoDelay();
+        this.socket.setTimeout(this.constructor.socketTimeoutTime);
     
         socket.on('data', this.onData);
-        console.log(socket.address, 'connected');
 
         this.netStatus=NETSTATUS.OPENED;
         this.packetState=PACKETSTATE.NAMELEN;
@@ -65,9 +62,11 @@ class Device {
 
         socket.on('end', () => {
             console.log('name',this.name, this.socket.address, 'disconnected');
+            this.deviceErrored();
         });        
         socket.on('timeout', () => {
             console.log('name',this.name, this.socket.address, 'timed out');
+            this.deviceErrored();
         });
         socket.on('error', (err)=>{
             console.log('name',this.name, this.socket.address, 'error occured', err);
@@ -111,19 +110,10 @@ class Device {
         }else{
             if (this.clientHandshake[0]!==handshake){
                 console.log(this.name, this.socket.address, 'incorrect handshake, exepcted '+this.clientHandshake[0]+' but recvd '+handshake);
-
-                //Added for Debugging
-                console.log("Last data:",this.lastData);
-                console.log("Current data:", textDecoder.decode(data));
-                //End Added for Debugging
-
                 this.deviceErrored();
                 return;
             }
             this.clientHandshake[0]++;
-            this.lastData=textDecoder.decode(data);//Added for debugging
-            console.log(this.lastData);
-            this.sendPacket("count: "+this.sendCount++);//Added for debugging
         }
     }
 
@@ -139,7 +129,7 @@ class Device {
                 this.nameWriteIndex++;
                 if (this.nameWriteIndex>=this.nameLength){
                     if (deviceKeys[this.name]){
-                        this.key=deviceKeys[this.name];
+                        this.key=deviceKeys[this.name].key;
                         this.packetState=PACKETSTATE.LEN1;
                     }else{
                         console.log(this.name, this.socket.address, 'unknown device name');

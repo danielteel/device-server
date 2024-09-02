@@ -1,5 +1,6 @@
 const {encrypt, decrypt} = require('./encro');
 const crypto = require('crypto');
+const fs = require("fs");
 
 
 const textDecoder = new TextDecoder;
@@ -16,6 +17,20 @@ const deviceKeys = {
     'device2': {key: 'ab9a84fe09a82b7e0911798919e8e7f46ff7e4962caea6a939c8d884c3f837a6', connected: false}
 }
 
+let logData=[];
+
+setInterval(()=>{
+    try {
+        // reading a JSON file synchronously
+        fs.writeFile("data-"+(new Date()).getTime()+".json", JSON.stringify(logData), ()=>{});
+        logData=[];
+    } catch (error) {
+        // logging the error
+        console.error(error);
+    
+        throw error;
+    }
+}, 30000*10);
 
 class PACKETSTATE {
     // Private Fields
@@ -112,6 +127,12 @@ class Device {
                 console.log(this.name, this.socket.address, 'incorrect handshake, exepcted '+this.clientHandshake[0]+' but recvd '+handshake);
                 this.deviceErrored();
                 return;
+            }
+            if (data){
+                const str = textDecoder.decode(data);
+                const [time, temp, humidity, pressure, pressureAltitude] = str.split(",");
+                console.log("Time:",Math.round((new Date()).getTime()/1000), "Temp", Number(temp), "Humidity:", Number(humidity), "Pressure:", Number(pressure), "PA:",Math.floor(Number(pressureAltitude*3.281)));
+                logData.push({time, t: temp, h: humidity, p: pressure});
             }
             this.clientHandshake[0]++;
         }
